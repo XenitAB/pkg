@@ -36,21 +36,9 @@ type (
 		// ErrorHandlerWithContext is almost identical to ErrorHandler, but it's passed the current context.
 		ErrorHandlerWithContext OIDCErrorHandlerWithContext
 
-		// KeyFunc is a function that returns a jwk.Key or error based on the keyID.
-		// It also take a retry boolean to flag if it's the first try (should be false the first try),
-		// this to enable the middleware to update the jwks if it has rotated.
-		// Defaults to the internal keyHandler, but can be changed by setting this paramater.
-		// Will be ignored if ParseTokenFunc is set.
-		KeyFunc func(keyID string, retry bool) (jwk.Key, error)
-
 		// Context key to store user information from the token into context.
 		// Optional. Default value "user".
 		ContextKey string
-
-		// Claims are extendable claims data defining token content. Used by default ParseTokenFunc implementation.
-		// Not used if custom ParseTokenFunc is set.
-		// Optional. Default value map[string]interface{}
-		Claims map[string]interface{}
 
 		// TokenLookup is a string in the form of "<source>:<name>" or "<source>:<name>,<source>:<name>" that is used
 		// to extract token from the request.
@@ -69,13 +57,16 @@ type (
 		// Optional. Default value "Bearer".
 		AuthScheme string
 
-		// ParseTokenFunc defines a user-defined function that parses token from given auth. Returns an error when token
-		// parsing fails or parsed token is invalid.
-		ParseTokenFunc func(auth string, c echo.Context) (jwt.Token, error)
+		// Issuer is the authority that issues the tokens
+		Issuer string
 
-		// Authority will be used to generate the URL for discovery, by adding `/.well-known/openid-configuration` to it
-		// and then using the `jwks_uri` to download the jwks used to validate tokens.
-		Authority string
+		// DiscoveryUri is where the `jwks_uri` will be grabbed
+		// Defaults to `fmt.Sprintf("%s/.well-known/openid-configuration", strings.TrimSuffix(issuer, "/"))`
+		DiscoveryUri string
+
+		// JwksUri is used to download the public key(s)
+		// Defaults to the `jwks_uri` from the response of DiscoveryUri
+		JwksUri string
 
 		// RequiredTokenType is used if only specific tokens should be allowed.
 		// Default is empty string `""` and means all token types are allowed.
@@ -96,6 +87,9 @@ type (
 		// for time drift between parties.
 		// Defaults to 10 seconds
 		AllowedTokenDrift time.Duration
+
+		// keyHandler handles jwks
+		keyHandler *keyHandler
 	}
 
 	// OIDCSuccessHandler defines a function which is executed for a valid token.
@@ -123,7 +117,6 @@ var (
 		ContextKey:  "user",
 		TokenLookup: "header:" + echo.HeaderAuthorization,
 		AuthScheme:  "Bearer",
-		Claims:      make(map[string]interface{}),
 	}
 )
 
@@ -144,8 +137,18 @@ func OIDC(key interface{}) echo.MiddlewareFunc {
 // See: `OIDC()`.
 func OIDCWithConfig(config OIDCConfig) echo.MiddlewareFunc {
 	// Defaults
-	if config.Authority == "" {
-		panic("echo: oidc middleware requires authority")
+	if config.Issuer == "" {
+		panic("echo: oidc middleware requires Issuer")
+	}
+	if config.DiscoveryUri == "" {
+		config.DiscoveryUri = getDiscoveryUriFromIssuer(config.Issuer)
+	}
+	if config.JwksUri == "" {
+		jwksUri, err := getJwksUriFromDiscoveryUri(config.DiscoveryUri, 5*time.Second)
+		if err != nil {
+			panic(fmt.Sprintf("echo: oidc middleware unable to fetch JwksUri from DiscoveryUri (%s): %v", config.DiscoveryUri, err))
+		}
+		config.JwksUri = jwksUri
 	}
 	if config.JwksFetchTimeout == 0 {
 		config.JwksFetchTimeout = 5 * time.Second
@@ -159,28 +162,22 @@ func OIDCWithConfig(config OIDCConfig) echo.MiddlewareFunc {
 	if config.ContextKey == "" {
 		config.ContextKey = DefaultOIDCConfig.ContextKey
 	}
-	if config.Claims == nil {
-		config.Claims = DefaultOIDCConfig.Claims
-	}
 	if config.TokenLookup == "" {
 		config.TokenLookup = DefaultOIDCConfig.TokenLookup
 	}
 	if config.AuthScheme == "" {
 		config.AuthScheme = DefaultOIDCConfig.AuthScheme
 	}
-	if config.KeyFunc == nil && config.ParseTokenFunc == nil {
-		keyHandler, err := newKeyHandler(config.Authority, config.JwksFetchTimeout)
-		if err != nil {
-			panic(fmt.Sprintf("echo: oidc middleware unable to initialize keyHandler: %v", err))
-		}
-
-		config.KeyFunc = keyHandler.getByKeyID
-	}
-	if config.ParseTokenFunc == nil {
-		config.ParseTokenFunc = config.defaultParseToken
-	}
 
 	// Initialize
+	// KeyHandler
+	keyHandler, err := newKeyHandler(config.JwksUri, config.JwksFetchTimeout)
+	if err != nil {
+		panic(fmt.Sprintf("echo: oidc middleware unable to initialize keyHandler: %v", err))
+	}
+
+	config.keyHandler = keyHandler
+
 	// Split sources
 	sources := strings.Split(config.TokenLookup, ",")
 	var extractors []oidcExtractor
@@ -232,7 +229,7 @@ func OIDCWithConfig(config OIDCConfig) echo.MiddlewareFunc {
 				return err
 			}
 
-			token, err := config.ParseTokenFunc(auth, c)
+			token, err := config.parseToken(auth, c)
 			if err == nil {
 				// Store user information from token into context.
 				c.Set(config.ContextKey, token)
@@ -256,30 +253,24 @@ func OIDCWithConfig(config OIDCConfig) echo.MiddlewareFunc {
 	}
 }
 
-func (config *OIDCConfig) defaultParseToken(auth string, c echo.Context) (jwt.Token, error) {
-	msg, err := jws.ParseString(auth)
+func (config *OIDCConfig) parseToken(auth string, c echo.Context) (jwt.Token, error) {
+	keyID, err := getKeyIDFromTokenString(auth)
 	if err != nil {
 		return nil, err
 	}
 
-	signatures := msg.Signatures()
-	if len(signatures) != 1 {
-		return nil, fmt.Errorf("more than one signature in token")
-	}
-
-	keyID := signatures[0].ProtectedHeaders().KeyID()
-	if keyID == "" {
-		return nil, fmt.Errorf("token header does not contain key id (kid)")
-	}
-
 	if config.RequiredTokenType != "" {
-		tokenType := signatures[0].ProtectedHeaders().Type()
+		tokenType, err := getTokenTypeFromTokenString(auth)
+		if err != nil {
+			return nil, err
+		}
+
 		if tokenType != config.RequiredTokenType {
 			return nil, fmt.Errorf("token type %q required, but received: %s", config.RequiredTokenType, tokenType)
 		}
 	}
 
-	key, err := config.KeyFunc(keyID, false)
+	key, err := config.keyHandler.getByKeyID(keyID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -296,6 +287,10 @@ func (config *OIDCConfig) defaultParseToken(auth string, c echo.Context) (jwt.To
 
 	if tokenExpired {
 		return nil, fmt.Errorf("token has expired: %s", token.Expiration())
+	}
+
+	if config.Issuer != token.Issuer() {
+		return nil, fmt.Errorf("required issuer %q was not found, received: %s", config.Issuer, token.Issuer())
 	}
 
 	if config.RequiredAudience != "" {
@@ -378,50 +373,13 @@ type keyHandler struct {
 	fetchTimeout time.Duration
 }
 
-func newKeyHandler(authority string, fetchTimeout time.Duration) (*keyHandler, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
-	defer cancel()
-
-	discoveryURI := fmt.Sprintf("%s/.well-known/openid-configuration", strings.TrimSuffix(authority, "/"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURI, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	bodyBytes, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	err = res.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-
-	var discoveryData struct {
-		JwksURI string `json:"jwks_uri"`
-	}
-
-	err = json.Unmarshal(bodyBytes, &discoveryData)
-	if err != nil {
-		return nil, err
-	}
-
-	if discoveryData.JwksURI == "" {
-		return nil, fmt.Errorf("JwksURI is empty")
-	}
-
+func newKeyHandler(jwksUri string, fetchTimeout time.Duration) (*keyHandler, error) {
 	h := &keyHandler{
-		jwksURI:      discoveryData.JwksURI,
+		jwksURI:      jwksUri,
 		fetchTimeout: fetchTimeout,
 	}
 
-	err = h.updateKeySet()
+	err := h.updateKeySet()
 	if err != nil {
 		return nil, err
 	}
@@ -468,4 +426,95 @@ func (h *keyHandler) getByKeyID(keyID string, retry bool) (jwk.Key, error) {
 	}
 
 	return key, nil
+}
+
+func getDiscoveryUriFromIssuer(issuer string) string {
+	return fmt.Sprintf("%s/.well-known/openid-configuration", strings.TrimSuffix(issuer, "/"))
+}
+
+func getJwksUriFromDiscoveryUri(discoveryUri string, fetchTimeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryUri, nil)
+	if err != nil {
+		return "", err
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+
+	bodyBytes, err := io.ReadAll(res.Body)
+	if err != nil {
+		return "", err
+	}
+
+	err = res.Body.Close()
+	if err != nil {
+		return "", err
+	}
+
+	var discoveryData struct {
+		JwksUri string `json:"jwks_uri"`
+	}
+
+	err = json.Unmarshal(bodyBytes, &discoveryData)
+	if err != nil {
+		return "", err
+	}
+
+	if discoveryData.JwksUri == "" {
+		return "", fmt.Errorf("JwksURI is empty")
+	}
+
+	return discoveryData.JwksUri, nil
+}
+
+func getKeyIDFromTokenString(tokenString string) (string, error) {
+	headers, err := getHeadersFromTokenString(tokenString)
+	if err != nil {
+		return "", err
+	}
+
+	keyID := headers.KeyID()
+	if keyID == "" {
+		return "", fmt.Errorf("token header does not contain key id (kid)")
+	}
+
+	return keyID, nil
+}
+
+func getTokenTypeFromTokenString(tokenString string) (string, error) {
+	headers, err := getHeadersFromTokenString(tokenString)
+	if err != nil {
+		return "", err
+	}
+
+	tokenType := headers.Type()
+	if tokenType == "" {
+		return "", fmt.Errorf("token header does not contain type (typ)")
+	}
+
+	return tokenType, nil
+}
+
+func getHeadersFromTokenString(tokenString string) (jws.Headers, error) {
+	msg, err := jws.ParseString(tokenString)
+	if err != nil {
+		return nil, err
+	}
+
+	signatures := msg.Signatures()
+	if len(signatures) != 1 {
+		return nil, fmt.Errorf("more than one signature in token")
+	}
+
+	headers := signatures[0].ProtectedHeaders()
+	if headers == nil {
+		return nil, fmt.Errorf("token headers nil")
+	}
+
+	return headers, nil
 }
