@@ -441,6 +441,8 @@ func getJwksUriFromDiscoveryUri(discoveryUri string, fetchTimeout time.Duration)
 		return "", err
 	}
 
+	req.Header.Set("Accept", "application/json")
+
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
@@ -466,7 +468,7 @@ func getJwksUriFromDiscoveryUri(discoveryUri string, fetchTimeout time.Duration)
 	}
 
 	if discoveryData.JwksUri == "" {
-		return "", fmt.Errorf("JwksURI is empty")
+		return "", fmt.Errorf("JwksUri is empty")
 	}
 
 	return discoveryData.JwksUri, nil
@@ -503,7 +505,7 @@ func getTokenTypeFromTokenString(tokenString string) (string, error) {
 func getHeadersFromTokenString(tokenString string) (jws.Headers, error) {
 	msg, err := jws.ParseString(tokenString)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to parse tokenString: %w", err)
 	}
 
 	signatures := msg.Signatures()
@@ -512,9 +514,6 @@ func getHeadersFromTokenString(tokenString string) (jws.Headers, error) {
 	}
 
 	headers := signatures[0].ProtectedHeaders()
-	if headers == nil {
-		return nil, fmt.Errorf("token headers nil")
-	}
 
 	return headers, nil
 }
