@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
+	"go.uber.org/multierr"
 )
 
 func Logger(logger logr.Logger) gin.HandlerFunc {
@@ -20,14 +21,19 @@ func Logger(logger logr.Logger) gin.HandlerFunc {
 
 		// Log request
 		path := c.Request.URL.Path
-		if c.Request.URL.RawQuery != "" {
-			path = path + "?" + c.Request.URL.RawQuery
-		}
-		lastErr := c.Errors.ByType(gin.ErrorTypePrivate).Last()
-		if lastErr != nil {
-			logger.Error(lastErr.Err, "", "path", path, "status", c.Writer.Status(), "method", c.Request.Method, "latency", latency, "ip", c.ClientIP())
-			return
-		}
-		logger.Info("", "path", path, "status", c.Writer.Status(), "method", c.Request.Method, "latency", latency, "ip", c.ClientIP())
+    statusCode := c.Writer.Status()
+
+    // Info log if 2xx response
+    if statusCode >= 200 && statusCode < 300 {
+      logger.Info("", "path", path, "status", statusCode, "method", c.Request.Method, "latency", latency, "ip", c.ClientIP())
+      return
+    }
+
+    // Error log if any other status and include error message
+    var err error
+    for _, e := range c.Errors {
+      err = multierr.Append(err, e.Err)
+    }
+		logger.Error(err, "", "path", path, "status", statusCode, "method", c.Request.Method, "latency", latency, "ip", c.ClientIP())
 	}
 }
