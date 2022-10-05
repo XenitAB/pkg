@@ -8,7 +8,7 @@ import (
 	"go.uber.org/multierr"
 )
 
-func Logger(logger logr.Logger) gin.HandlerFunc {
+func Logger(logger logr.Logger, includeLatency bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Start timer
 		start := time.Now()
@@ -20,12 +20,16 @@ func Logger(logger logr.Logger) gin.HandlerFunc {
 		latency := time.Now().Sub(start)
 
 		// Log request
-		path := c.Request.URL.Path
+    path := c.Request.URL.Path
     statusCode := c.Writer.Status()
+    kvs := []interface{}{"path", path, "status", statusCode, "method", c.Request.Method, "ip", c.ClientIP()}
+    if includeLatency {
+      kvs = append(kvs, "latency", latency)
+    }
 
     // Info log if 2xx response
     if statusCode >= 200 && statusCode < 300 {
-      logger.Info("", "path", path, "status", statusCode, "method", c.Request.Method, "latency", latency, "ip", c.ClientIP())
+      logger.Info("", kvs...)
       return
     }
 
@@ -34,6 +38,6 @@ func Logger(logger logr.Logger) gin.HandlerFunc {
     for _, e := range c.Errors {
       err = multierr.Append(err, e.Err)
     }
-		logger.Error(err, "", "path", path, "status", statusCode, "method", c.Request.Method, "latency", latency, "ip", c.ClientIP())
+		logger.Error(err, "", kvs...)
 	}
 }
