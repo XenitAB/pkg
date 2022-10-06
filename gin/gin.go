@@ -11,6 +11,7 @@ import (
 )
 
 func Default(logger logr.Logger) *gogin.Engine {
+  gogin.SetMode(gogin.ReleaseMode)
   mdlw := metricsmiddleware.New(metricsmiddleware.Config{
 		Recorder: metrics.NewRecorder(metrics.Config{}),
 	})
