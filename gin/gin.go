@@ -24,6 +24,8 @@ type LogConfig struct {
 	IncludeLatency bool
 	// Should request logs should include client IP.
 	IncludeClientIP bool
+	// Context keys to include in request log.
+	IncludeKeys []string
 }
 
 type MetricsConfig struct {
