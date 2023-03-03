@@ -10,7 +10,7 @@ import (
 func Logger(cfg LogConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Do not log if path matches filter.
-		if cfg.PathFilter.MatchString(c.Request.URL.Path) {
+		if cfg.PathFilter != nil && cfg.PathFilter.MatchString(c.Request.URL.Path) {
 			c.Next()
 			return
 		}
