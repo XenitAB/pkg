@@ -1,10 +1,10 @@
 package gin
 
 import (
+	"errors"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/multierr"
 )
 
 func Logger(cfg LogConfig) gin.HandlerFunc {
@@ -49,10 +49,10 @@ func Logger(cfg LogConfig) gin.HandlerFunc {
 		}
 
 		// Error log if any other status and include error message
-		var err error
+		errs := []error{}
 		for _, e := range c.Errors {
-			err = multierr.Append(err, e.Err)
+			errs = append(errs, e.Err)
 		}
-		cfg.Logger.Error(err, "", kvs...)
+		cfg.Logger.Error(errors.Join(errs...), "", kvs...)
 	}
 }
