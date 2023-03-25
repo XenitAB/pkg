@@ -29,6 +29,8 @@ type LogConfig struct {
 }
 
 type MetricsConfig struct {
+	// Service is used to differentiate between multiple metrics handlers.
+	Service string
 	// Handler ID to use when using dynamic path parameters.
 	HandlerID string
 }
@@ -42,6 +44,7 @@ func DefaultConfig() Config {
 			IncludeClientIP: false,
 		},
 		MetricsConfig: MetricsConfig{
+			Service:   "",
 			HandlerID: "",
 		},
 	}
@@ -50,6 +53,7 @@ func DefaultConfig() Config {
 func NewEngine(cfg Config) *gogin.Engine {
 	gogin.SetMode(gogin.ReleaseMode)
 	mdlw := metricsmiddleware.New(metricsmiddleware.Config{
+		Service:  cfg.MetricsConfig.Service,
 		Recorder: metrics.NewRecorder(metrics.Config{}),
 	})
 	engine := gogin.New()
