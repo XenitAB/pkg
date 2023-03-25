@@ -10,6 +10,10 @@ import (
 	ginmetricsmiddleware "github.com/slok/go-http-metrics/middleware/gin"
 )
 
+var (
+	recorder = metrics.NewRecorder(metrics.Config{})
+)
+
 type Config struct {
 	LogConfig     LogConfig
 	MetricsConfig MetricsConfig
@@ -54,7 +58,7 @@ func NewEngine(cfg Config) *gogin.Engine {
 	gogin.SetMode(gogin.ReleaseMode)
 	mdlw := metricsmiddleware.New(metricsmiddleware.Config{
 		Service:  cfg.MetricsConfig.Service,
-		Recorder: metrics.NewRecorder(metrics.Config{}),
+		Recorder: recorder,
 	})
 	engine := gogin.New()
 	engine.Use(Logger(cfg.LogConfig))
