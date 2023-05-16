@@ -8,3 +8,7 @@ updates:
     directory: "kubernetes"
     schedule:
       interval: "daily"
+  - package-ecosystem: "gomod"
+    directory: "channels"
+    schedule:
+      interval: "daily"
