@@ -25,3 +25,13 @@ func Merge[T any](cs ...<-chan T) <-chan T {
 	}()
 	return out
 }
+
+func Map[T any, U any](in <-chan T, mapFunc func(T) U) <-chan U {
+	out := make(chan U)
+	go func() {
+		for v := range in {
+			out <- mapFunc(v)
+		}
+	}()
+	return out
+}
