@@ -6,7 +6,7 @@ require (
 	github.com/gin-gonic/gin v1.9.0
 	github.com/go-logr/logr v1.2.4
 	github.com/slok/go-http-metrics v0.10.0
-	github.com/stretchr/testify v1.8.2
+	github.com/stretchr/testify v1.8.4
 	github.com/tonglil/buflogr v1.0.1
 )
 
