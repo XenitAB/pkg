@@ -15,7 +15,11 @@ import (
 func TestLogOk(t *testing.T) {
 	var buf bytes.Buffer
 	log := buflogr.NewWithBuffer(&buf)
-	mdlw := Logger(log, false)
+	cfg := LogConfig{
+		Logger:          log,
+		IncludeClientIP: true,
+	}
+	mdlw := Logger(cfg)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("GET", "/foo", nil)
@@ -26,7 +30,11 @@ func TestLogOk(t *testing.T) {
 func TestLogInternalServerError(t *testing.T) {
 	var buf bytes.Buffer
 	log := buflogr.NewWithBuffer(&buf)
-	mdlw := Logger(log, false)
+	cfg := LogConfig{
+		Logger:          log,
+		IncludeClientIP: true,
+	}
+	mdlw := Logger(cfg)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/bar", nil)
