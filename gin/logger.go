@@ -5,10 +5,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 )
+
+const loggerKey = "logr.logger"
 
 func Logger(cfg LogConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Inject loggin in gin context
+		c.Set(loggerKey, cfg.Logger)
+
 		// Do not log if path matches filter.
 		if cfg.PathFilter != nil && cfg.PathFilter.MatchString(c.Request.URL.Path) {
 			c.Next()
@@ -55,4 +61,16 @@ func Logger(cfg LogConfig) gin.HandlerFunc {
 		}
 		cfg.Logger.Error(errors.Join(errs...), "", kvs...)
 	}
+}
+
+func FromContextOrDiscard(c *gin.Context) logr.Logger {
+	logVal, ok := c.Get(loggerKey)
+	if !ok {
+		return logr.Discard()
+	}
+	log, ok := logVal.(logr.Logger)
+	if !ok {
+		return logr.Discard()
+	}
+	return log
 }
